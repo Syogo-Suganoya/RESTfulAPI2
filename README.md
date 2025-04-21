@@ -1,1 +1,1 @@
-[Render](https://render.com/) + FAstAPI のテスト
+[Render](https://render.com/) + FastAPI のテスト
