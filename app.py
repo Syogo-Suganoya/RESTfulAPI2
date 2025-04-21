@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List
 from sqlalchemy import create_engine, Column, Integer, String, Boolean
@@ -75,12 +75,12 @@ def get_db():
 
 # ルーティング
 @app.get("/todos", response_model=List[TodoSchema])
-def get_todos(db: Session = next(get_db())):
+def get_todos(db: Session = Depends(get_db)):
     return db.query(Todo).all()
 
 
 @app.get("/todos/{todo_id}", response_model=TodoSchema)
-def get_todo(todo_id: int, db: Session = next(get_db())):
+def get_todo(todo_id: int, db: Session = Depends(get_db)):
     todo = db.query(Todo).get(todo_id)
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
@@ -88,7 +88,7 @@ def get_todo(todo_id: int, db: Session = next(get_db())):
 
 
 @app.post("/todos", response_model=TodoSchema, status_code=201)
-def create_todo(todo: TodoCreate, db: Session = next(get_db())):
+def create_todo(todo: TodoCreate, db: Session = Depends(get_db)):
     new_todo = Todo(title=todo.title, done=todo.done)
     db.add(new_todo)
     db.commit()
@@ -97,7 +97,7 @@ def create_todo(todo: TodoCreate, db: Session = next(get_db())):
 
 
 @app.put("/todos/{todo_id}", response_model=TodoSchema)
-def update_todo(todo_id: int, updates: TodoUpdate, db: Session = next(get_db())):
+def update_todo(todo_id: int, updates: TodoUpdate, db: Session = Depends(get_db)):
     todo = db.query(Todo).get(todo_id)
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
@@ -110,7 +110,7 @@ def update_todo(todo_id: int, updates: TodoUpdate, db: Session = next(get_db()))
 
 
 @app.delete("/todos/{todo_id}", status_code=204)
-def delete_todo(todo_id: int, db: Session = next(get_db())):
+def delete_todo(todo_id: int, db: Session = Depends(get_db)):
     todo = db.query(Todo).get(todo_id)
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
