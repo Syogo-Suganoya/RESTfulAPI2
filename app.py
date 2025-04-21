@@ -1,71 +1,118 @@
-from flask import Flask, request, jsonify
-from models import db, Todo
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List
+from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
+import os
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.sqlite3'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db.init_app(app)
+# DB設定（SQLite or PostgreSQL）
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./db.sqlite3")
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 
-# ✅ アプリの起動時に初期化（初回のみ）
-def init_db_and_seed():
-    with app.app_context():
-        db.create_all()
+# モデル定義
+class Todo(Base):
+    __tablename__ = "todos"
 
-        # 初期データがなければ挿入
-        if not Todo.query.first():
-            sample_todos = [
-                Todo(title="買い物に行く", done=False),
-                Todo(title="読書をする", done=False),
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    done = Column(Boolean, default=False)
+
+
+# Pydanticスキーマ
+class TodoSchema(BaseModel):
+    id: int
+    title: str
+    done: bool
+
+    class Config:
+        orm_mode = True
+
+
+class TodoCreate(BaseModel):
+    title: str
+    done: bool = False
+
+
+class TodoUpdate(BaseModel):
+    title: str | None = None
+    done: bool | None = None
+
+
+# FastAPIインスタンス
+app = FastAPI()
+
+
+# DB初期化＆シードデータ
+def init_db():
+    Base.metadata.create_all(bind=engine)
+    with SessionLocal() as db:
+        if not db.query(Todo).first():
+            initial_data = [
+                Todo(title="買い物に行く"),
+                Todo(title="読書をする"),
                 Todo(title="コードを書く", done=True)
             ]
-            db.session.bulk_save_objects(sample_todos)
-            db.session.commit()
+            db.add_all(initial_data)
+            db.commit()
             print("✅ 初期データを挿入しました")
 
 
-# 初期化処理を明示的に呼ぶ
-init_db_and_seed()
+init_db()
 
 
-@app.route('/todos', methods=['GET'])
-def get_todos():
-    todos = Todo.query.all()
-    return jsonify([todo.to_dict() for todo in todos])
+# DI（依存性注入）用
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-@app.route('/todos/<int:todo_id>', methods=['GET'])
-def get_todo(todo_id):
-    todo = Todo.query.get_or_404(todo_id)
-    return jsonify(todo.to_dict())
+# ルーティング
+@app.get("/todos", response_model=List[TodoSchema])
+def get_todos(db: Session = next(get_db())):
+    return db.query(Todo).all()
 
 
-@app.route('/todos', methods=['POST'])
-def create_todo():
-    data = request.get_json()
-    todo = Todo(title=data['title'], done=False)
-    db.session.add(todo)
-    db.session.commit()
-    return jsonify(todo.to_dict()), 201
+@app.get("/todos/{todo_id}", response_model=TodoSchema)
+def get_todo(todo_id: int, db: Session = next(get_db())):
+    todo = db.query(Todo).get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return todo
 
 
-@app.route('/todos/<int:todo_id>', methods=['PUT'])
-def update_todo(todo_id):
-    todo = Todo.query.get_or_404(todo_id)
-    data = request.get_json()
-    todo.title = data.get('title', todo.title)
-    todo.done = data.get('done', todo.done)
-    db.session.commit()
-    return jsonify(todo.to_dict())
+@app.post("/todos", response_model=TodoSchema, status_code=201)
+def create_todo(todo: TodoCreate, db: Session = next(get_db())):
+    new_todo = Todo(title=todo.title, done=todo.done)
+    db.add(new_todo)
+    db.commit()
+    db.refresh(new_todo)
+    return new_todo
 
 
-@app.route('/todos/<int:todo_id>', methods=['DELETE'])
-def delete_todo(todo_id):
-    todo = Todo.query.get_or_404(todo_id)
-    db.session.delete(todo)
-    db.session.commit()
-    return '', 204
+@app.put("/todos/{todo_id}", response_model=TodoSchema)
+def update_todo(todo_id: int, updates: TodoUpdate, db: Session = next(get_db())):
+    todo = db.query(Todo).get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    if updates.title is not None:
+        todo.title = updates.title
+    if updates.done is not None:
+        todo.done = updates.done
+    db.commit()
+    return todo
 
 
-if __name__ == '__main__':
-    app.run()
+@app.delete("/todos/{todo_id}", status_code=204)
+def delete_todo(todo_id: int, db: Session = next(get_db())):
+    todo = db.query(Todo).get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    db.delete(todo)
+    db.commit()
